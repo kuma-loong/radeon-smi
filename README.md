@@ -95,9 +95,8 @@ per-process memory is shown as `N/A`. Power is read only when a hwmon sensor
 is available. The default table omits MIG and compute mode. It retains an
 ECC field, shown as `N/A` when the driver exposes no ECC counter; this does
 not imply that every older Radeon card lacks ECC hardware. The header shows
-the actual kernel driver (`radeon`). The `driver_version` query field is `N/A`
-because a comparable driver package version is unavailable. This tool does
-not control clocks, power, fans, or driver settings.
+the actual kernel driver (`radeon`). This tool does not control clocks, power,
+fans, or driver settings.
 
 ## Development
 

@@ -15,7 +15,6 @@ const FIELDS: &[&str] = &[
     "index",
     "name",
     "pci.bus_id",
-    "driver_version",
     "display_active",
     "memory.total",
     "memory.used",
@@ -126,13 +125,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             _ if arg.starts_with("-l") && arg.len() > 2 => {
                 options.interval = Some(parse_interval(&arg[2..], false)?)
             }
-            "--query-compute-apps" => {
-                return Err(
-                    "per-process GPU accounting is not available on legacy radeon devices"
-                        .to_owned(),
-                )
-            }
-            _ if arg.starts_with("--query-compute-apps=") => {
+            _ if arg == "--query-compute-apps" || arg.starts_with("--query-compute-apps=") => {
                 return Err(
                     "per-process GPU accounting is not available on legacy radeon devices"
                         .to_owned(),
@@ -245,7 +238,6 @@ fn value(field: &str, gpu: &Device, m: &Metrics, stamp: &str, nounits: bool) -> 
         "index" => gpu.index.to_string(),
         "name" => gpu.name.clone(),
         "pci.bus_id" => bus_id(&gpu.bus_id),
-        "driver_version" => "N/A".to_owned(),
         "display_active" => m
             .display_active
             .map(|v| if v { "Enabled" } else { "Disabled" }.to_owned())
@@ -528,7 +520,11 @@ fn run(options: Options) -> Result<(), String> {
                 );
             }
         } else {
-            let processes = (options.mode == Mode::Table).then(|| process::discover(&devices));
+            let processes = if options.mode == Mode::Table {
+                process::discover(&devices)
+            } else {
+                Vec::new()
+            };
             let devices: Vec<_> = devices
                 .into_iter()
                 .map(|gpu| {
@@ -538,7 +534,7 @@ fn run(options: Options) -> Result<(), String> {
                 .collect();
             let stamp = timestamp();
             match options.mode {
-                Mode::Table => table(&devices, processes.as_deref().unwrap_or(&[]), &stamp),
+                Mode::Table => table(&devices, &processes, &stamp),
                 Mode::Detail => detail(&devices, &stamp),
                 Mode::Query => query(&devices, &stamp, &options, first),
                 _ => unreachable!(),
@@ -580,6 +576,11 @@ mod tests {
         ];
         let options = parse(&args).unwrap();
         assert!(options.noheader && options.nounits);
+        assert!(parse(&[
+            "--query-gpu=driver_version".to_owned(),
+            "--format=csv".to_owned()
+        ])
+        .is_err());
     }
 
     #[test]

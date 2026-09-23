@@ -24,7 +24,7 @@ pub fn discover(devices: &[Device]) -> Vec<Process> {
         .iter()
         .map(|device| {
             let card = Path::new("/dev/dri").join(&device.card);
-            [node_id(&card), device.node.as_deref().and_then(node_id)]
+            [node_id(&card), node_id(&device.node)]
         })
         .collect();
     let mut processes = Vec::new();
@@ -83,7 +83,7 @@ mod tests {
             name: String::new(),
             driver: String::new(),
             sysfs: "/nonexistent".into(),
-            node: Some("/dev/null".into()),
+            node: "/dev/null".into(),
             card: "nonexistent".to_owned(),
         };
         let mine: Vec<_> = discover(&[device])

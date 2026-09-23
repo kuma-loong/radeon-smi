@@ -55,7 +55,7 @@ pub struct Device {
     pub name: String,
     pub driver: String,
     pub sysfs: PathBuf,
-    pub node: Option<PathBuf>,
+    pub node: PathBuf,
     pub card: String,
 }
 
@@ -175,7 +175,7 @@ fn discover_at(drm: &Path, nodes: &Path) -> io::Result<Vec<Device>> {
                 Some(nodes.join(name))
             })
         });
-        let node = render.or_else(|| Some(nodes.join(&card)));
+        let node = render.unwrap_or_else(|| nodes.join(&card));
         devices.push(Device {
             index: 0,
             bus_id,
@@ -264,41 +264,36 @@ pub fn collect(device: &Device) -> Metrics {
         display_active: display_active(device),
         ..Metrics::default()
     };
-    if device.driver == "radeon" {
-        let Some(node) = &device.node else {
+    let file = match OpenOptions::new().read(true).write(true).open(&device.node) {
+        Ok(file) => file,
+        Err(err) => {
+            metrics.issue = Some(format!(
+                "cannot open {}: {err}; check render/video device permissions",
+                device.node.display()
+            ));
             return metrics;
-        };
-        let file = match OpenOptions::new().read(true).write(true).open(node) {
-            Ok(file) => file,
-            Err(err) => {
-                metrics.issue = Some(format!(
-                    "cannot open {}: {err}; check render/video device permissions",
-                    node.display()
-                ));
-                return metrics;
-            }
-        };
-        let mut gem = GemInfo::default();
-        if ioctl(&file, IOCTL_GEM_INFO, &mut gem).is_ok() {
-            metrics.memory_total = Some(gem.vram_size);
         }
-        let mut used = 0_u64;
-        if radeon_info(&file, INFO_VRAM_USAGE, &mut used).is_ok() {
-            metrics.memory_used = Some(used);
-        }
-        let mut clock = 0_u32;
-        if radeon_info(&file, INFO_GPU_SCLK, &mut clock).is_ok() {
-            metrics.graphics_mhz = Some(clock);
-        }
-        if radeon_info(&file, INFO_GPU_MCLK, &mut clock).is_ok() {
-            metrics.memory_mhz = Some(clock);
-        }
-        metrics.utilization = sample_busy(&file);
-        if metrics.utilization.is_none() {
-            metrics.issue = Some(
-                "GPU utilization is unavailable through the radeon DRM query interface".to_owned(),
-            );
-        }
+    };
+    let mut gem = GemInfo::default();
+    if ioctl(&file, IOCTL_GEM_INFO, &mut gem).is_ok() {
+        metrics.memory_total = Some(gem.vram_size);
+    }
+    let mut used = 0_u64;
+    if radeon_info(&file, INFO_VRAM_USAGE, &mut used).is_ok() {
+        metrics.memory_used = Some(used);
+    }
+    let mut clock = 0_u32;
+    if radeon_info(&file, INFO_GPU_SCLK, &mut clock).is_ok() {
+        metrics.graphics_mhz = Some(clock);
+    }
+    if radeon_info(&file, INFO_GPU_MCLK, &mut clock).is_ok() {
+        metrics.memory_mhz = Some(clock);
+    }
+    metrics.utilization = sample_busy(&file);
+    if metrics.utilization.is_none() {
+        metrics.issue = Some(
+            "GPU utilization is unavailable through the radeon DRM query interface".to_owned(),
+        );
     }
     metrics
 }
