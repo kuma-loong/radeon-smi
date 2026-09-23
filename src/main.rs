@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod device;
+mod process;
 
 use device::{Device, Metrics};
+use process::Process;
 use std::env;
 use std::ffi::CStr;
 use std::io::{self, Write};
@@ -24,11 +26,6 @@ const FIELDS: &[&str] = &[
     "clocks.current.memory",
     "power.draw",
     "power.limit",
-    "fan.speed",
-    "pstate",
-    "persistence_mode",
-    "compute_mode",
-    "mig.mode.current",
     "ecc.errors.uncorrected.volatile.total",
 ];
 
@@ -235,15 +232,6 @@ fn bus_id(id: &str) -> String {
     id.to_owned()
 }
 
-fn driver_version(gpu: &Device) -> String {
-    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    if kernel.trim().is_empty() {
-        gpu.driver.clone()
-    } else {
-        format!("{} (kernel {})", gpu.driver, kernel.trim())
-    }
-}
-
 fn value(field: &str, gpu: &Device, m: &Metrics, stamp: &str, nounits: bool) -> String {
     let unit = |number: String, suffix: &str| {
         if nounits {
@@ -257,7 +245,7 @@ fn value(field: &str, gpu: &Device, m: &Metrics, stamp: &str, nounits: bool) -> 
         "index" => gpu.index.to_string(),
         "name" => gpu.name.clone(),
         "pci.bus_id" => bus_id(&gpu.bus_id),
-        "driver_version" => driver_version(gpu),
+        "driver_version" => "N/A".to_owned(),
         "display_active" => m
             .display_active
             .map(|v| if v { "Enabled" } else { "Disabled" }.to_owned())
@@ -324,35 +312,31 @@ fn cells(left: &str, middle: &str, right: &str) -> String {
     )
 }
 
-fn table(devices: &[(Device, Metrics)], stamp: &str) {
+fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
     let border = format!("+{}+", "-".repeat(89));
     let split = format!("+{}+{}+{}+", "-".repeat(41), "-".repeat(24), "-".repeat(22));
     println!("{stamp}\n{border}");
     println!(
         "{}",
         frame(&format!(
-            "RADEON-SMI {}     Driver: Linux DRM     ROCm: N/A",
-            env!("CARGO_PKG_VERSION")
+            "RADEON-SMI {}     Driver: {}",
+            env!("CARGO_PKG_VERSION"),
+            devices[0].0.driver
         ))
     );
     println!("{split}");
     println!(
         "{}",
         cells(
-            " GPU  Name                Persistence-M",
-            " Bus-Id          Disp.A",
+            " GPU  Name",
+            " Bus-Id         Disp.A",
             " Volatile Uncorr. ECC"
         )
     );
     println!(
         "{}",
-        cells(
-            " Fan  Temp  Perf  Pwr:Usage/Cap",
-            " Memory-Usage",
-            " GPU-Util  Compute M."
-        )
+        cells(" Temp  Power  Clocks GFX/MEM", " Memory-Usage", " GPU-Util")
     );
-    println!("{}", cells("", "", " MIG M."));
     println!("{}", split.replace('-', "="));
     for (gpu, m) in devices {
         let display = m
@@ -377,23 +361,30 @@ fn table(devices: &[(Device, Metrics)], stamp: &str) {
             .zip(m.power_cap_watts)
             .map(|(draw, cap)| format!("{draw:.0}W / {cap:.0}W"))
             .unwrap_or_else(|| "N/A".to_owned());
+        let gfx = m
+            .graphics_mhz
+            .map(|v| format!("{v}MHz"))
+            .unwrap_or_else(|| "N/A".to_owned());
+        let mem = m
+            .memory_mhz
+            .map(|v| format!("{v}MHz"))
+            .unwrap_or_else(|| "N/A".to_owned());
         println!(
             "{}",
             cells(
-                &format!(" {:<3}  {:<24} N/A", gpu.index, shorten(&gpu.name, 24)),
-                &format!(" {:<17} {}", bus_id(&gpu.bus_id), display),
+                &format!(" {:>3}  {}", gpu.index, shorten(&gpu.name, 34)),
+                &format!(" {:<17} {:>3}", bus_id(&gpu.bus_id), display),
                 " N/A"
             )
         );
         println!(
             "{}",
             cells(
-                &format!(" N/A  {:<4}  N/A   {power}", temp),
+                &format!(" {:<5} {:<6} {gfx}/{mem}", temp, power),
                 &format!(" {memory}"),
-                &format!(" {:<5}     N/A", util)
+                &format!(" {util}")
             )
         );
-        println!("{}", cells("", "", " N/A"));
         if let Some(issue) = &m.issue {
             println!("{}", frame(&format!("Telemetry: {issue}")));
         }
@@ -401,9 +392,29 @@ fn table(devices: &[(Device, Metrics)], stamp: &str) {
     }
     println!();
     println!("{border}");
+    println!("{}", frame("Processes: GPU device users"));
+    println!("{border}");
+    println!(
+        "| {:>3}  {:>7}  {:<60} {:>12} |",
+        "GPU", "PID", "Process name", "GPU Memory"
+    );
+    println!("{border}");
+    if processes.is_empty() {
+        println!("{}", frame("No visible GPU processes"));
+    } else {
+        for p in processes {
+            println!(
+                "| {:>3}  {:>7}  {:<60} {:>12} |",
+                p.gpu,
+                p.pid,
+                shorten(&p.name, 60),
+                "N/A"
+            );
+        }
+    }
     println!(
         "{}",
-        frame("Processes: N/A (per-process accounting is unavailable on legacy radeon GPUs)")
+        frame("Visible processes only (/proc permissions); per-process VRAM: N/A")
     );
     println!("{border}");
 }
@@ -488,6 +499,7 @@ fn run(options: Options) -> Result<(), String> {
                 );
             }
         } else {
+            let processes = (options.mode == Mode::Table).then(|| process::discover(&devices));
             let devices: Vec<_> = devices
                 .into_iter()
                 .map(|gpu| {
@@ -497,7 +509,7 @@ fn run(options: Options) -> Result<(), String> {
                 .collect();
             let stamp = timestamp();
             match options.mode {
-                Mode::Table => table(&devices, &stamp),
+                Mode::Table => table(&devices, processes.as_deref().unwrap_or(&[]), &stamp),
                 Mode::Detail => detail(&devices, &stamp),
                 Mode::Query => query(&devices, &stamp, &options, first),
                 _ => unreachable!(),

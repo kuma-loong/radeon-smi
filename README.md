@@ -85,13 +85,19 @@ percentage of samples where the graphics busy bit is set during a 200 ms
 window. Older drivers or GPU families may not expose this register through
 the query ioctl; utilization then appears as `N/A`.
 
-VRAM values are device-wide. The legacy `radeon` driver does not expose
-reliable per-process GPU memory or utilization accounting, so the Processes
-section explicitly reports that limitation. Power is read only when a hwmon
-sensor is available. Fan percentage, ECC, compute mode, and MIG are `N/A`;
-values are never inferred from unrelated metrics. The `driver_version` query
-field reports the kernel release alongside the `radeon` driver name. This
-tool does not control clocks, power, fans, or driver settings.
+VRAM values are device-wide. The Processes section finds visible processes
+with open GPU device files in `/proc/<pid>/fd`. This identifies GPU device
+users, not whether each process is actively submitting work. Linux `/proc`
+permissions may hide other users' processes; running as root can show more,
+but is not required for GPU telemetry. The legacy `radeon` driver does not
+expose reliable per-process GPU memory or utilization accounting, so
+per-process memory is shown as `N/A`. Power is read only when a hwmon sensor
+is available. The default table omits MIG and compute mode. It retains an
+ECC field, shown as `N/A` when the driver exposes no ECC counter; this does
+not imply that every older Radeon card lacks ECC hardware. The header shows
+the actual kernel driver (`radeon`). The `driver_version` query field is `N/A`
+because a comparable driver package version is unavailable. This tool does
+not control clocks, power, fans, or driver settings.
 
 ## Development
 
