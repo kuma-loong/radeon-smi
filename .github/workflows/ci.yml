@@ -12,8 +12,8 @@ jobs:
     container: rust:1.95.0-slim-bullseye
     steps:
       - uses: actions/checkout@v4
-      - name: Install packaging tools
-        run: apt-get update && apt-get install -y --no-install-recommends binutils dpkg-dev ca-certificates
+      - name: Check packaging tools
+        run: command -v objdump && command -v dpkg-deb && command -v sha256sum
       - name: Check formatting
         run: rustup component add rustfmt clippy && cargo fmt --check
       - name: Lint and test
