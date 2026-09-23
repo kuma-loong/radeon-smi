@@ -303,13 +303,39 @@ fn frame(text: &str) -> String {
     format!("| {:<87} |", shorten(text, 87))
 }
 
+fn title(left: &str, right: &str) -> String {
+    let left = shorten(left, 43);
+    let right = shorten(right, 44);
+    format!("| {left}{:>width$} |", right, width = 87 - left.len())
+}
+
 fn cells(left: &str, middle: &str, right: &str) -> String {
+    format!("|{left}|{middle}|{right}|")
+}
+
+fn gpu_name(gpu: &str, name: &str) -> String {
+    format!(" {:<4}{:>35} ", shorten(gpu, 4), shorten(name, 35))
+}
+
+fn bus_display(bus: &str, display: &str) -> String {
+    format!(" {:<16}{:>6} ", shorten(bus, 16), shorten(display, 6))
+}
+
+fn temp_power_clocks(temp: &str, power: &str, clocks: &str) -> String {
     format!(
-        "|{:<41}|{:<24}|{:<22}|",
-        shorten(left, 41),
-        shorten(middle, 24),
-        shorten(right, 22)
+        " {:<8}{:<12}{:>19} ",
+        shorten(temp, 8),
+        shorten(power, 12),
+        shorten(clocks, 19)
     )
+}
+
+fn memory_cell(value: &str) -> String {
+    format!("{:>23} ", shorten(value, 23))
+}
+
+fn right_cell(value: &str) -> String {
+    format!("{:>21} ", shorten(value, 21))
 }
 
 fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
@@ -318,24 +344,27 @@ fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
     println!("{stamp}\n{border}");
     println!(
         "{}",
-        frame(&format!(
-            "RADEON-SMI {}     Driver: {}",
-            env!("CARGO_PKG_VERSION"),
-            devices[0].0.driver
-        ))
+        title(
+            &format!("RADEON-SMI {}", env!("CARGO_PKG_VERSION")),
+            &format!("Driver: {}", devices[0].0.driver)
+        )
     );
     println!("{split}");
     println!(
         "{}",
         cells(
-            " GPU  Name",
-            " Bus-Id         Disp.A",
-            " Volatile Uncorr. ECC"
+            &gpu_name("GPU", "Name"),
+            &bus_display("Bus-Id", "Disp.A"),
+            &right_cell("Volatile Uncorr. ECC")
         )
     );
     println!(
         "{}",
-        cells(" Temp  Power  Clocks GFX/MEM", " Memory-Usage", " GPU-Util")
+        cells(
+            &temp_power_clocks("Temp", "Power", "Clocks GFX/MEM"),
+            &memory_cell("Memory-Usage"),
+            &right_cell("GPU-Util")
+        )
     );
     println!("{}", split.replace('-', "="));
     for (gpu, m) in devices {
@@ -372,17 +401,17 @@ fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
         println!(
             "{}",
             cells(
-                &format!(" {:>3}  {}", gpu.index, shorten(&gpu.name, 34)),
-                &format!(" {:<17} {:>3}", bus_id(&gpu.bus_id), display),
-                " N/A"
+                &gpu_name(&gpu.index.to_string(), &gpu.name),
+                &bus_display(&bus_id(&gpu.bus_id), display),
+                &right_cell("N/A")
             )
         );
         println!(
             "{}",
             cells(
-                &format!(" {:<5} {:<6} {gfx}/{mem}", temp, power),
-                &format!(" {memory}"),
-                &format!(" {util}")
+                &temp_power_clocks(&temp, &power, &format!("{gfx}/{mem}")),
+                &memory_cell(&memory),
+                &right_cell(&util)
             )
         );
         if let Some(issue) = &m.issue {
@@ -395,7 +424,7 @@ fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
     println!("{}", frame("Processes: GPU device users"));
     println!("{border}");
     println!(
-        "| {:>3}  {:>7}  {:<60} {:>12} |",
+        "| {:<3}  {:<7}  {:<60} {:>12} |",
         "GPU", "PID", "Process name", "GPU Memory"
     );
     println!("{border}");
@@ -404,7 +433,7 @@ fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
     } else {
         for p in processes {
             println!(
-                "| {:>3}  {:>7}  {:<60} {:>12} |",
+                "| {:<3}  {:<7}  {:<60} {:>12} |",
                 p.gpu,
                 p.pid,
                 shorten(&p.name, 60),
@@ -562,5 +591,61 @@ mod tests {
     fn invalid_intervals_fail() {
         assert!(parse_interval("0", false).is_err());
         assert!(parse_interval("abc", true).is_err());
+    }
+
+    #[test]
+    fn table_headers_and_values_share_column_positions() {
+        let header = cells(
+            &gpu_name("GPU", "Name"),
+            &bus_display("Bus-Id", "Disp.A"),
+            &right_cell("Volatile Uncorr. ECC"),
+        );
+        let data = cells(
+            &gpu_name("0", "Radeon R7 250"),
+            &bus_display("00000000:01:00.0", "Off"),
+            &right_cell("N/A"),
+        );
+        assert_eq!(header.len(), 91);
+        assert_eq!(data.len(), 91);
+        assert_eq!(
+            header.find("Name").unwrap() + 4,
+            data.find("Radeon R7 250").unwrap() + 13
+        );
+        assert_eq!(header.find("Bus-Id"), data.find("00000000:01:00.0"));
+        assert_eq!(
+            header.find("Disp.A").unwrap() + 6,
+            data.find("Off").unwrap() + 3
+        );
+        assert_eq!(
+            header.find("ECC").unwrap() + 3,
+            data.find("N/A").unwrap() + 3
+        );
+
+        let header = cells(
+            &temp_power_clocks("Temp", "Power", "Clocks GFX/MEM"),
+            &memory_cell("Memory-Usage"),
+            &right_cell("GPU-Util"),
+        );
+        let data = cells(
+            &temp_power_clocks("30C", "N/A", "300MHz/300MHz"),
+            &memory_cell("361MiB / 2048MiB"),
+            &right_cell("0%"),
+        );
+        assert_eq!(header.len(), 91);
+        assert_eq!(data.len(), 91);
+        assert_eq!(header.find("Temp"), data.find("30C"));
+        assert_eq!(header.find("Power"), data.find("N/A"));
+        assert_eq!(
+            header.find("GFX/MEM").unwrap() + 7,
+            data.find("300MHz/300MHz").unwrap() + 13
+        );
+        assert_eq!(
+            header.find("Memory-Usage").unwrap() + 12,
+            data.find("361MiB / 2048MiB").unwrap() + "361MiB / 2048MiB".len()
+        );
+        assert_eq!(
+            header.find("GPU-Util").unwrap() + 8,
+            data.find("0%").unwrap() + 2
+        );
     }
 }
