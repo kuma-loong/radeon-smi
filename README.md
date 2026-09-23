@@ -2,10 +2,12 @@
 
 **SMI-style monitoring for legacy AMD Radeon GPUs.**
 
+![radeon-smi monitoring a Radeon R7 250 under OpenGL load](docs/preview.png)
+
 `radeon-smi` is a small, read-only Linux command-line tool for GPUs using the
 open-source `radeon` kernel driver. It presents a familiar GPU summary and
-supports selected `nvidia-smi` query and loop options. It is aimed at older
-Radeon cards, not at replacing AMD SMI or ROCm SMI for newer GPUs.
+supports selected `nvidia-smi` query and loop options. It focuses on older
+Radeon GPUs; newer GPUs already have AMD SMI and ROCm SMI.
 
 The program reads Linux DRM query ioctls and sysfs directly. It does not need
 ROCm, a daemon, a privileged helper, or a compiler on the machine where a
@@ -70,7 +72,7 @@ systems, the user needs access to the `render` group. For example:
 sudo usermod -aG render "$USER"
 ```
 
-Log out and back in after changing group membership. If a card has no render
+Log out and back in after changing group membership. If a GPU has no render
 node, the tool tries its `/dev/dri/card*` node. DRM authentication and device
 permissions may prevent telemetry in that case, especially over SSH. The tool
 still displays data available from sysfs and marks unavailable fields `N/A`.
@@ -94,7 +96,7 @@ expose reliable per-process GPU memory or utilization accounting, so
 per-process memory is shown as `N/A`. Power is read only when a hwmon sensor
 is available. The default table omits MIG and compute mode. It retains an
 ECC field, shown as `N/A` when the driver exposes no ECC counter; this does
-not imply that every older Radeon card lacks ECC hardware. The header shows
+not imply that every older Radeon GPU lacks ECC hardware. The header shows
 the actual kernel driver (`radeon`). This tool does not control clocks, power,
 fans, or driver settings.
 
