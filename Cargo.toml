@@ -1,0 +1,20 @@
+[package]
+name = "radeon-smi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "Apache-2.0"
+description = "SMI-style monitoring for legacy AMD Radeon GPUs"
+repository = "https://github.com/kuma-loong/radeon-smi"
+readme = "README.md"
+keywords = ["amd", "radeon", "gpu", "monitoring"]
+categories = ["command-line-utilities", "hardware-support"]
+exclude = ["/dist/**"]
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
