@@ -2,7 +2,7 @@
 
 **SMI-style monitoring for legacy AMD Radeon GPUs.**
 
-![radeon-smi monitoring a Radeon R7 250 under OpenGL load](docs/preview.png)
+![radeon-smi showing an amdgpu driven Radeon R7 250 and per-process VRAM usage](docs/preview.png)
 
 `radeon-smi` is a small, read-only Linux command-line tool for older Radeon GPUs
 using the open-source `radeon` or `amdgpu` kernel driver. It presents a familiar GPU summary and
