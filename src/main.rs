@@ -19,12 +19,17 @@ const FIELDS: &[&str] = &[
     "memory.total",
     "memory.used",
     "memory.free",
+    "memory.visible.total",
+    "memory.visible.used",
+    "memory.gtt.total",
+    "memory.gtt.used",
     "utilization.gpu",
     "temperature.gpu",
     "clocks.current.graphics",
     "clocks.current.memory",
     "power.draw",
     "power.limit",
+    "fan.speed",
     "ecc.errors.uncorrected.volatile.total",
 ];
 
@@ -127,7 +132,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             _ if arg == "--query-compute-apps" || arg.starts_with("--query-compute-apps=") => {
                 return Err(
-                    "per-process GPU accounting is not available on legacy radeon devices"
+                    "per-process compute accounting is not available on legacy Radeon GPUs"
                         .to_owned(),
                 );
             }
@@ -255,6 +260,22 @@ fn value(field: &str, gpu: &Device, m: &Metrics, stamp: &str, nounits: bool) -> 
             .zip(m.memory_used)
             .map(|(total, used)| unit(mib(total.saturating_sub(used)).to_string(), "MiB"))
             .unwrap_or_else(|| "N/A".to_owned()),
+        "memory.visible.total" => m
+            .visible_memory_total
+            .map(|v| unit(mib(v).to_string(), "MiB"))
+            .unwrap_or_else(|| "N/A".to_owned()),
+        "memory.visible.used" => m
+            .visible_memory_used
+            .map(|v| unit(mib(v).to_string(), "MiB"))
+            .unwrap_or_else(|| "N/A".to_owned()),
+        "memory.gtt.total" => m
+            .gtt_total
+            .map(|v| unit(mib(v).to_string(), "MiB"))
+            .unwrap_or_else(|| "N/A".to_owned()),
+        "memory.gtt.used" => m
+            .gtt_used
+            .map(|v| unit(mib(v).to_string(), "MiB"))
+            .unwrap_or_else(|| "N/A".to_owned()),
         "utilization.gpu" => m
             .utilization
             .map(|v| unit(v.to_string(), "%"))
@@ -278,6 +299,10 @@ fn value(field: &str, gpu: &Device, m: &Metrics, stamp: &str, nounits: bool) -> 
         "power.limit" => m
             .power_cap_watts
             .map(|v| unit(format!("{v:.2}"), "W"))
+            .unwrap_or_else(|| "N/A".to_owned()),
+        "fan.speed" => m
+            .fan_rpm
+            .map(|v| unit(v.to_string(), "RPM"))
             .unwrap_or_else(|| "N/A".to_owned()),
         _ => "N/A".to_owned(),
     }
@@ -429,13 +454,15 @@ fn table(devices: &[(Device, Metrics)], processes: &[Process], stamp: &str) {
                 p.gpu,
                 p.pid,
                 shorten(&p.name, 60),
-                "N/A"
+                p.memory
+                    .map(|v| format!("{}MiB", mib(v)))
+                    .unwrap_or_else(|| "N/A".to_owned())
             );
         }
     }
     println!(
         "{}",
-        frame("Visible processes only (/proc permissions); per-process VRAM: N/A")
+        frame("Visible processes only (/proc permissions); VRAM uses DRM fdinfo when available")
     );
     println!("{border}");
 }
@@ -508,7 +535,7 @@ fn run(options: Options) -> Result<(), String> {
             &options.id,
         )?;
         if devices.is_empty() {
-            return Err("no legacy Radeon DRM GPUs found".to_owned());
+            return Err("no Radeon DRM GPUs found (radeon or amdgpu)".to_owned());
         }
         if options.mode == Mode::List {
             for gpu in &devices {

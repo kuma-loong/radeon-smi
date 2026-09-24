@@ -4,8 +4,8 @@
 
 ![radeon-smi monitoring a Radeon R7 250 under OpenGL load](docs/preview.png)
 
-`radeon-smi` is a small, read-only Linux command-line tool for GPUs using the
-open-source `radeon` kernel driver. It presents a familiar GPU summary and
+`radeon-smi` is a small, read-only Linux command-line tool for older Radeon GPUs
+using the open-source `radeon` or `amdgpu` kernel driver. It presents a familiar GPU summary and
 supports selected `nvidia-smi` query and loop options. It focuses on older
 Radeon GPUs; newer GPUs already have AMD SMI and ROCm SMI.
 
@@ -16,6 +16,8 @@ prebuilt binary is installed.
 ## Install
 
 Download the latest assets from [GitHub Releases](https://github.com/kuma-loong/radeon-smi/releases).
+The published 0.1.0 release supports `radeon` only; `amdgpu` support is in
+the unreleased 0.2.0 source.
 
 ### Debian or Ubuntu
 
@@ -81,23 +83,31 @@ program does not use setuid, `/dev/mem`, or write ioctls.
 
 ## Scope and limitations
 
-The initial implementation supports Linux `radeon` DRM devices. It has been
-tested on an Oland/Radeon R7 250 with Debian 12. GPU utilization is the
+The tool supports Linux `radeon` and `amdgpu` DRM devices. It has been tested
+on an Oland/Radeon R7 250 with Debian 12. On `radeon`, GPU utilization is the
 percentage of samples where the graphics busy bit is set during a 200 ms
-window. Older drivers or GPU families may not expose this register through
-the query ioctl; utilization then appears as `N/A`.
+window. On `amdgpu`, the tool first reads `gpu_busy_percent`; for GCN 1/2
+GPUs that do not expose it, it samples the same graphics activity bit through
+the read-only DRM query ioctl. If neither interface works, utilization is `N/A`.
+
+On `amdgpu`, VRAM, visible VRAM and GTT totals and usage come from sysfs. The
+additional `memory.visible.*` and `memory.gtt.*` fields are available in CSV
+and detail output. The `fan.speed` field is reported only when hwmon exposes
+an actual RPM reading. Many older boards provide no power, fan RPM or ECC
+readings, even though the corresponding interfaces exist on other GPUs.
 
 VRAM values are device-wide. The Processes section finds visible processes
 with open GPU device files in `/proc/<pid>/fd`. This identifies GPU device
 users, not whether each process is actively submitting work. Linux `/proc`
 permissions may hide other users' processes; running as root can show more,
-but is not required for GPU telemetry. The legacy `radeon` driver does not
-expose reliable per-process GPU memory or utilization accounting, so
-per-process memory is shown as `N/A`. Power is read only when a hwmon sensor
+but is not required for GPU telemetry. On `amdgpu`, per-process VRAM is read
+from DRM fdinfo when supported. Multiple file descriptors for one DRM client
+are counted once. On `radeon`, or when fdinfo is unavailable, per-process
+memory is shown as `N/A`. Power is read only when a hwmon sensor
 is available. The default table omits MIG and compute mode. It retains an
 ECC field, shown as `N/A` when the driver exposes no ECC counter; this does
 not imply that every older Radeon GPU lacks ECC hardware. The header shows
-the actual kernel driver (`radeon`). This tool does not control clocks, power,
+the actual kernel driver (`radeon` or `amdgpu`). This tool does not control clocks, power,
 fans, or driver settings.
 
 ## Development

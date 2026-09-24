@@ -12,6 +12,10 @@ const AMD_VENDOR: u16 = 0x1002;
 const DRM_COMMAND_BASE: u64 = 0x40;
 const RADEON_GEM_INFO: u64 = 0x1c;
 const RADEON_INFO: u64 = 0x27;
+const AMDGPU_INFO: u64 = 0x05;
+const AMDGPU_INFO_READ_MMR_REG: u32 = 0x15;
+const AMDGPU_INFO_DEV_INFO: u32 = 0x16;
+const AMDGPU_INFO_SENSOR: u32 = 0x1d;
 const INFO_VRAM_USAGE: u32 = 0x1e;
 const INFO_GPU_SCLK: u32 = 0x22;
 const INFO_GPU_MCLK: u32 = 0x23;
@@ -34,9 +38,21 @@ struct RadeonInfo {
     value: u64,
 }
 
+#[repr(C)]
+struct AmdgpuInfo {
+    return_pointer: u64,
+    return_size: u32,
+    query: u32,
+    data: [u32; 4],
+}
+
 // Linux's generic _IOWR encoding, used by the x86_64 and aarch64 targets.
 const fn drm_iowr(number: u64, size: usize) -> libc::c_ulong {
     ((3_u64 << 30) | ((size as u64) << 16) | ((b'd' as u64) << 8) | number) as libc::c_ulong
+}
+
+const fn drm_iow(number: u64, size: usize) -> libc::c_ulong {
+    ((1_u64 << 30) | ((size as u64) << 16) | ((b'd' as u64) << 8) | number) as libc::c_ulong
 }
 
 const IOCTL_GEM_INFO: libc::c_ulong = drm_iowr(
@@ -46,6 +62,11 @@ const IOCTL_GEM_INFO: libc::c_ulong = drm_iowr(
 const IOCTL_INFO: libc::c_ulong = drm_iowr(
     DRM_COMMAND_BASE + RADEON_INFO,
     std::mem::size_of::<RadeonInfo>(),
+);
+// DRM_IOW, unlike the radeon queries above which use DRM_IOWR.
+const IOCTL_AMDGPU_INFO: libc::c_ulong = drm_iow(
+    DRM_COMMAND_BASE + AMDGPU_INFO,
+    std::mem::size_of::<AmdgpuInfo>(),
 );
 
 #[derive(Clone, Debug)]
@@ -65,6 +86,11 @@ pub struct Metrics {
     pub utilization: Option<u32>,
     pub memory_total: Option<u64>,
     pub memory_used: Option<u64>,
+    pub gtt_total: Option<u64>,
+    pub gtt_used: Option<u64>,
+    pub visible_memory_total: Option<u64>,
+    pub visible_memory_used: Option<u64>,
+    pub fan_rpm: Option<u64>,
     pub graphics_mhz: Option<u32>,
     pub memory_mhz: Option<u32>,
     pub power_watts: Option<f64>,
@@ -153,7 +179,7 @@ fn discover_at(drm: &Path, nodes: &Path) -> io::Result<Vec<Device>> {
             .find_map(|line| line.strip_prefix("DRIVER="))
             .unwrap_or("unknown")
             .to_owned();
-        if driver != "radeon" {
+        if driver != "radeon" && driver != "amdgpu" {
             continue;
         }
         let name = pci_name(
@@ -238,13 +264,40 @@ fn radeon_info<T>(file: &File, request: u32, value: &mut T) -> io::Result<()> {
     ioctl(file, IOCTL_INFO, &mut info)
 }
 
-fn sample_busy(file: &File) -> Option<u32> {
+fn amdgpu_info<T>(file: &File, query: u32, data: [u32; 4], value: &mut T) -> io::Result<()> {
+    let mut info = AmdgpuInfo {
+        return_pointer: (value as *mut T) as u64,
+        return_size: std::mem::size_of::<T>() as u32,
+        query,
+        data,
+    };
+    ioctl(file, IOCTL_AMDGPU_INFO, &mut info)
+}
+
+fn amdgpu_sensor(file: &File, sensor: u32) -> Option<u32> {
+    let mut value = 0_u32;
+    amdgpu_info(file, AMDGPU_INFO_SENSOR, [sensor, 0, 0, 0], &mut value)
+        .ok()
+        .map(|_| value)
+}
+
+fn sample_busy(file: &File, driver: &str) -> Option<u32> {
     let deadline = Instant::now() + Duration::from_millis(200);
     let mut total = 0_u32;
     let mut busy = 0_u32;
     while Instant::now() < deadline {
         let mut status = GRBM_STATUS;
-        if radeon_info(file, INFO_READ_REG, &mut status).is_err() {
+        let result = if driver == "radeon" {
+            radeon_info(file, INFO_READ_REG, &mut status)
+        } else {
+            amdgpu_info(
+                file,
+                AMDGPU_INFO_READ_MMR_REG,
+                [GRBM_STATUS / 4, 1, u32::MAX, 0],
+                &mut status,
+            )
+        };
+        if result.is_err() {
             return None;
         }
         total += 1;
@@ -262,8 +315,20 @@ pub fn collect(device: &Device) -> Metrics {
         power_watts: hwmon(device, "power1_average").map(|v| v as f64 / 1_000_000.0),
         power_cap_watts: hwmon(device, "power1_cap").map(|v| v as f64 / 1_000_000.0),
         display_active: display_active(device),
+        fan_rpm: hwmon(device, "fan1_input"),
         ..Metrics::default()
     };
+    if device.driver == "amdgpu" {
+        metrics.memory_total = read_number(device.sysfs.join("mem_info_vram_total"));
+        metrics.memory_used = read_number(device.sysfs.join("mem_info_vram_used"));
+        metrics.visible_memory_total = read_number(device.sysfs.join("mem_info_vis_vram_total"));
+        metrics.visible_memory_used = read_number(device.sysfs.join("mem_info_vis_vram_used"));
+        metrics.gtt_total = read_number(device.sysfs.join("mem_info_gtt_total"));
+        metrics.gtt_used = read_number(device.sysfs.join("mem_info_gtt_used"));
+        metrics.utilization = read_number(device.sysfs.join("gpu_busy_percent"))
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| *v <= 100);
+    }
     let file = match OpenOptions::new().read(true).write(true).open(&device.node) {
         Ok(file) => file,
         Err(err) => {
@@ -274,6 +339,23 @@ pub fn collect(device: &Device) -> Metrics {
             return metrics;
         }
     };
+    if device.driver == "amdgpu" {
+        metrics.graphics_mhz = amdgpu_sensor(&file, 1).or(metrics.graphics_mhz);
+        metrics.memory_mhz = amdgpu_sensor(&file, 2).or(metrics.memory_mhz);
+        metrics.temperature_c = amdgpu_sensor(&file, 3)
+            .map(|v| (v / 1000) as i64)
+            .or(metrics.temperature_c);
+        if metrics.utilization.is_none() {
+            let mut dev_info = [0_u32; 5];
+            // GRBM_STATUS bit 31 describes graphics-pipe activity on GCN 1/2.
+            if amdgpu_info(&file, AMDGPU_INFO_DEV_INFO, [0; 4], &mut dev_info).is_ok()
+                && matches!(dev_info[4], 110 | 120)
+            {
+                metrics.utilization = sample_busy(&file, "amdgpu");
+            }
+        }
+        return metrics;
+    }
     let mut gem = GemInfo::default();
     if ioctl(&file, IOCTL_GEM_INFO, &mut gem).is_ok() {
         metrics.memory_total = Some(gem.vram_size);
@@ -289,11 +371,22 @@ pub fn collect(device: &Device) -> Metrics {
     if radeon_info(&file, INFO_GPU_MCLK, &mut clock).is_ok() {
         metrics.memory_mhz = Some(clock);
     }
-    metrics.utilization = sample_busy(&file);
+    metrics.utilization = sample_busy(&file, "radeon");
     if metrics.utilization.is_none() {
         metrics.issue = Some(
             "GPU utilization is unavailable through the radeon DRM query interface".to_owned(),
         );
     }
     metrics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amdgpu_info_matches_linux_drm_uapi() {
+        assert_eq!(std::mem::size_of::<AmdgpuInfo>(), 32);
+        assert_eq!(IOCTL_AMDGPU_INFO, 0x4020_6445);
+    }
 }
